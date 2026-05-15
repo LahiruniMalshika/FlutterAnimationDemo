@@ -369,7 +369,7 @@ class MockResponses {
     final stage = score <= 30 ? 1 : (score <= 70 ? 2 : 3);
     final wl = _wl(score);
     final forest =
-        {1: 'saplings', 2: 'medium_trees', 3: 'full_lush_trees'}[stage]!;
+    {1: 'saplings', 2: 'medium_trees', 3: 'full_lush_trees'}[stage]!;
     final dock = {1: 'empty', 2: 'one_person', 3: 'two_people'}[stage]!;
 
     return {
@@ -424,14 +424,14 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 1 · Score 5 · Onboarding done',
       description:
-          '+5 points from onboarding. Lake rises a little. Still stage 1.',
+      '+5 points from onboarding. Lake rises a little. Still stage 1.',
       response: buildState(score: 5),
       pointsDelta: 5,
     ),
     DemoScenario(
       label: 'Stage 1 · Score 11 · Water level mid',
       description:
-          'Score crosses 11 → water level changes to "mid". Background crossfades.',
+      'Score crosses 11 → water level changes to "mid". Background crossfades.',
       response: buildState(score: 11),
       pointsDelta: 6,
     ),
@@ -444,7 +444,7 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 2 · Score 31 · Animals appear!',
       description:
-          'Score crosses 31 → Stage 2 begins. Trees grow. Dock gets one person. Fish, bird, rabbit can appear (50%).',
+      'Score crosses 31 → Stage 2 begins. Trees grow. Dock gets one person. Fish, bird, rabbit can appear (50%).',
       response: buildState(
         score: 31,
         fishVisible: true,
@@ -467,7 +467,7 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 2 · Score 61 · Water high + bonsai small',
       description:
-          'Score crosses 61 → water "high". User also meditated → bonsai_small appears.',
+      'Score crosses 61 → water "high". User also meditated → bonsai_small appears.',
       response: buildState(
         score: 61,
         fishVisible: true,
@@ -481,7 +481,7 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 3 · Score 71 · Full ecosystem!',
       description:
-          'Score crosses 71 → Stage 3! Full lush trees. Dock 2 people. Duck, otter, deer can now appear.',
+      'Score crosses 71 → Stage 3! Full lush trees. Dock 2 people. Duck, otter, deer can now appear.',
       response: buildState(
         score: 71,
         fishVisible: true,
@@ -498,7 +498,7 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 3 · Score 81 · Water mid · Bonsai large!',
       description:
-          'Score 81. 15+ meditation points → bonsai grows to LARGE. All 6 animals can appear.',
+      'Score 81. 15+ meditation points → bonsai grows to LARGE. All 6 animals can appear.',
       response: buildState(
         score: 81,
         fishVisible: true,
@@ -515,7 +515,7 @@ class MockResponses {
     DemoScenario(
       label: 'Stage 3 · Score 100 · Perfect lake!',
       description:
-          'Maximum score. All animals. Bonsai large. Water at its highest.',
+      'Maximum score. All animals. Bonsai large. Water at its highest.',
       response: buildState(
         score: 100,
         fishVisible: true,
@@ -532,7 +532,7 @@ class MockResponses {
     DemoScenario(
       label: 'Midnight drain · -5 points',
       description:
-          'Passive drain applies. Score drops from wherever it was. Animals may disappear if stage drops.',
+      'Passive drain applies. Score drops from wherever it was. Animals may disappear if stage drops.',
       response: buildState(
         score: 75,
         fishVisible: true,
@@ -549,7 +549,7 @@ class MockResponses {
     DemoScenario(
       label: 'Negative behaviour · Score drops',
       description:
-          'User logged 3h+ social media (-5 pts). Lake drains visibly.',
+      'User logged 3h+ social media (-5 pts). Lake drains visibly.',
       response: buildState(
         score: 55,
         fishVisible: true,

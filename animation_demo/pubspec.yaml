@@ -1,5 +1,5 @@
-name: animation_demo
-description: animation_demo - Dopamine wellness lake ecosystem app
+name: baseline
+description: Baseline - Dopamine wellness lake ecosystem app
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -10,36 +10,26 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.4.9
-  riverpod_annotation: ^2.3.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  build_runner: ^2.4.7
-  riverpod_generator: ^2.3.9
   flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
 
   assets:
-    # ── Backgrounds (27 images: 3 stages × 3 water levels × 3 time-of-day)
     - assets/backgrounds/day/
     - assets/backgrounds/dusk/
     - assets/backgrounds/night/
-
-    # ── Animal sprite sheets
     - assets/animals/awake/day/
     - assets/animals/awake/dusk/
     - assets/animals/sleeping/day/
     - assets/animals/sleeping/night/
-
-    # ── Water shimmer strips
     - assets/shimmer/day/
     - assets/shimmer/dusk/
     - assets/shimmer/night/
-
-    # ── Bonsai tree
     - assets/bonsai/day/
     - assets/bonsai/dusk/
     - assets/bonsai/night/

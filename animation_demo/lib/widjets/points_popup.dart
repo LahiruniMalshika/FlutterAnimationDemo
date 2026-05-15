@@ -1,8 +1,9 @@
+// lib/widgets/points_popup.dart
 //
 // Shows a floating "+5" or "-3" badge that animates upward and fades out.
 //
 // Three animations play simultaneously:
-//   1. ScaleAnimation  — pops from 50% to 120% size (elastic feel)
+//   1. ScaleAnimation  — pops from 50% to 100% size (elastic feel)
 //   2. SlideAnimation  — floats upward
 //   3. FadeAnimation   — fades out towards the end
 //
@@ -13,6 +14,19 @@
 // When it becomes non-null, this widget shows and starts animating.
 // When the animation completes, it calls onComplete() which clears
 // the pendingPointsProvider back to null.
+//
+// ─── DEFENSIVE HARDENING ─────────────────────────────────────────────────────
+// `CurvedAnimation` asserts its parent's value is in [0, 1]. Most of the time
+// `AnimationController` honours that, but on some platforms (and during the
+// brief moment AnimationController.forward() is settling at the end), the
+// value can be reported as 1.0000003-ish — enough to trip the assertion in
+// debug mode.
+//
+// We feed every CurvedAnimation here through `ClampedAnimation` so the
+// parent value is always in [0, 1]. This costs effectively nothing and
+// guarantees the popup never causes the "parametric value … outside of
+// [0, 1] range" assertion, regardless of curve choice (including
+// `Interval(..., elasticOut)`).
 
 import 'package:flutter/material.dart';
 import '../utils/safe_curve.dart';
@@ -35,7 +49,11 @@ class _PointsPopupState extends State<PointsPopup>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
-  // Scale: 0.5 → 1.2 (pops up)
+  // ClampedAnimation guarantees the parent value handed to every
+  // CurvedAnimation below is strictly within [0, 1].
+  late Animation<double> _safeController;
+
+  // Scale: 0.5 → 1.0 (pops up)
   late Animation<double> _scaleAnim;
 
   // Fade: 1.0 → 0.0 (fades out near the end)
@@ -53,36 +71,35 @@ class _PointsPopupState extends State<PointsPopup>
       vsync: this,
     );
 
-    // // Add listener to clamp controller values to prevent precision errors
-    // _controller.addListener(() {
-    //   if (_controller.value < 0.0) _controller.value = 0.0;
-    //   if (_controller.value > 1.0) _controller.value = 1.0;
-    // });
+    _safeController = ClampedAnimation(_controller);
 
-    // Scale animation: plays in first 40% of total duration
-    // Interval(0.0, 0.4) means it runs from 0ms to 800ms
-    final clamped = ClampedAnimation(_controller);
-
+    // Scale animation: plays in first 35% of total duration.
+    // Interval(0.0, 0.35) means it runs from 0ms to 700ms.
+    // elasticOut intentionally overshoots above 1.0 — that overshoot
+    // is OK as a Tween OUTPUT (a scale of 1.08 just looks bouncy);
+    // what we must NOT do is feed an >1.0 value back into another curve.
     _scaleAnim = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(
-        parent: clamped,
+        parent: _safeController,
         curve: const Interval(0.0, 0.35, curve: Curves.elasticOut),
       ),
     );
 
+    // Fade out: plays in last 40% of total duration
     _fadeAnim = Tween<double>(begin: 1.0, end: 0.0).animate(
       CurvedAnimation(
-        parent: clamped,
+        parent: _safeController,
         curve: const Interval(0.6, 1.0, curve: Curves.easeOut),
       ),
     );
 
+    // Slide upward: plays from 30% to end
     _slideAnim = Tween<Offset>(
       begin: Offset.zero,
       end: const Offset(0, -1.8),
     ).animate(
       CurvedAnimation(
-        parent: clamped,
+        parent: _safeController,
         curve: const Interval(0.3, 1.0, curve: Curves.easeIn),
       ),
     );

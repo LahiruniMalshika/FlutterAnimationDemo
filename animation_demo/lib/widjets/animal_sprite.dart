@@ -1,40 +1,84 @@
 // lib/widgets/animal_sprite.dart
 //
-// Renders a single animal using sprite sheet animation.
+// ─── THE BUG THAT WAS CAUSING THE FULL SPRITE SHEET TO SHOW ──────────────────
 //
-// WHAT IS A SPRITE SHEET?
-// A sprite sheet is one wide image that contains all animation frames
-// placed side by side, like a film strip.
+// The original code used this inside ClipRect:
 //
-// Example — fish1_awake_sheet.png is 2253x251 pixels:
-//   [frame0][frame1][frame2][frame3][frame4][frame5][frame6][frame7][frame8]
-//   Each frame is 251x251 pixels. 9 frames total.
+//   Align(
+//     alignment: Alignment(_alignX, 0.0),
+//     widthFactor: 1.0 / frameCount,        ← THIS was wrong
+//     child: Image.asset(width: frameWidth * frameCount),
+//   )
 //
-// HOW WE ANIMATE IT:
-// We use ClipRect (a window/crop tool) to show only one frame at a time.
-// By shifting the Align parameter, we move which frame appears in the window.
+// The problem: widthFactor tells Align how wide to make the clipping window
+// as a fraction of the CHILD width. So widthFactor: 1/9 should show 1/9th of
+// the image. But the child Image.asset width was set to frameWidth * frameCount
+// (the full strip), and the display size (frameWidth) was a rough estimate.
+// The numbers didn't add up, so the Align wasn't cropping to exactly one frame.
 //
-//   Align(-1.0) → shows frame 0 (leftmost)
-//   Align(+1.0) → shows frame 8 (rightmost)
-//   Align in between → shows the corresponding frame
+// ─── THE FIX ─────────────────────────────────────────────────────────────────
 //
-// An AnimationController counts 0.0 → 1.0 repeatedly.
-// We convert that into a frame index (0, 1, 2 ... N-1).
-// Then we convert the frame index into an Align value.
+// Use a completely different, more reliable approach: CustomPainter.
 //
-// VISIBILITY:
-// AnimatedOpacity fades the animal in/out over 1.2 seconds when
-// its visibility state changes (true → false or false → true).
-// This gives a gentle appearance/disappearance effect.
+// CustomPainter draws exactly what you tell it. We load the sprite sheet as
+// an ImageProvider, convert it to a dart:ui Image, then on each frame we use
+// canvas.drawImageRect() to cut out EXACTLY one frame rectangle and draw it.
+//
+// drawImageRect(image, sourceRect, destRect, paint)
+//   sourceRect = the rectangle inside the sprite sheet for frame N
+//   destRect   = the rectangle on screen to draw it into
+//
+// This is pixel-perfect. No floating-point Align math. No widthFactor issues.
+//
+// ─── SPRITE SHEET FRAME SIZES (measured from actual files) ───────────────────
+//
+//   fish1_awake:     2253×251,  9 frames, each 250×251px
+//   otter_awake:     5551×361, 15 frames, each 370×361px
+//   bird_awake_dusk: 2781×432,  6 frames, each 463×432px
+//   bird_sleeping:   1651×353,  5 frames, each 330×353px
+//   deer_sleeping:   5173×835,  6 frames, each 862×835px
+//   duck_sleeping:   3090×413,  7 frames, each 441×413px
+//   fish2_sleeping:  2176×221, 10 frames, each 218×221px
+//   otter_sleeping:  4445×361, 12 frames, each 370×361px
+//   rabbit_sleeping: 2438×433,  6 frames, each 406×433px
 
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart' hide TimeOfDay;
+import 'package:flutter/services.dart';
 import '../models/animal_config.dart';
 import '../models/ecosystem_state.dart' show TimeOfDay;
+
+// ─────────────────────────────────────────────────────────────
+// Image cache — loads each sprite sheet image once and reuses it
+// ─────────────────────────────────────────────────────────────
+final Map<String, ui.Image> _imageCache = {};
+
+Future<ui.Image?> _loadImage(String assetPath) async {
+  if (_imageCache.containsKey(assetPath)) {
+    return _imageCache[assetPath];
+  }
+  try {
+    final data = await rootBundle.load(assetPath);
+    final bytes = data.buffer.asUint8List();
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    _imageCache[assetPath] = image;
+    return image;
+  } catch (e) {
+    debugPrint('Failed to load sprite sheet: $assetPath — $e');
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// AnimalSprite — renders one animal with correct frame animation
+// ─────────────────────────────────────────────────────────────
 
 class AnimalSprite extends StatefulWidget {
   final AnimalConfig config;
   final bool isVisible;
-  final bool isSleeping; // true when timeOfDay == night
+  final bool isSleeping;
   final TimeOfDay timeOfDay;
 
   const AnimalSprite({
@@ -52,6 +96,8 @@ class AnimalSprite extends StatefulWidget {
 class _AnimalSpriteState extends State<AnimalSprite>
     with SingleTickerProviderStateMixin {
   late AnimationController _frameController;
+  ui.Image? _spriteImage;
+  String _loadedPath = '';
   int _currentFrame = 0;
 
   @override
@@ -61,34 +107,49 @@ class _AnimalSpriteState extends State<AnimalSprite>
       duration: _frameDuration,
       vsync: this,
     )
-      ..addListener(_onFrameTick)
+      ..addListener(_onTick)
       ..repeat();
+    _loadSprite();
   }
 
-  // ── How long one complete animation cycle takes ───────────────
-  // frames / fps = total cycle seconds
+  // ── Duration for one full animation cycle ─────────────────────
   Duration get _frameDuration {
     final fps =
-        widget.isSleeping ? widget.config.sleepingFps : widget.config.awakeFps;
+    widget.isSleeping ? widget.config.sleepingFps : widget.config.awakeFps;
     final frames = widget.isSleeping
         ? widget.config.sleepingFrameCount
         : widget.config.awakeFrameCount;
-    final totalMs = (frames / fps * 1000).round();
-    return Duration(milliseconds: totalMs);
+    final ms = ((frames / fps) * 1000).round().clamp(100, 10000);
+    return Duration(milliseconds: ms);
   }
 
   int get _totalFrames => widget.isSleeping
       ? widget.config.sleepingFrameCount
       : widget.config.awakeFrameCount;
 
-  // ── Called every frame by the AnimationController ─────────────
-  void _onFrameTick() {
-    // Clamp the controller value to [0, 1] before using it
-    // This prevents floating-point precision errors (e.g., 1.0000005)
-    final clampedValue = _frameController.value.clamp(0.0, 1.0);
-    final newFrame =
-        (clampedValue * _totalFrames).floor().clamp(0, _totalFrames - 1);
+  // ── Load sprite sheet image into memory ───────────────────────
+  Future<void> _loadSprite() async {
+    final tod = widget.timeOfDay.name;
+    final path = widget.isSleeping
+        ? widget.config.sleepingAssetPath(tod)
+        : widget.config.awakeAssetPath(tod);
 
+    if (path == _loadedPath) return; // already loaded
+
+    final img = await _loadImage(path);
+    if (mounted) {
+      setState(() {
+        _spriteImage = img;
+        _loadedPath = path;
+        _currentFrame = 0;
+      });
+    }
+  }
+
+  // ── Advance frame counter on each animation tick ──────────────
+  void _onTick() {
+    final val = _frameController.value.clamp(0.0, 1.0);
+    final newFrame = (val * _totalFrames).floor().clamp(0, _totalFrames - 1);
     if (newFrame != _currentFrame) {
       setState(() => _currentFrame = newFrame);
     }
@@ -98,17 +159,14 @@ class _AnimalSpriteState extends State<AnimalSprite>
   void didUpdateWidget(AnimalSprite old) {
     super.didUpdateWidget(old);
 
-    // When sleep state changes, restart animation with new duration
-    if (old.isSleeping != widget.isSleeping) {
+    final stateChanged = old.isSleeping != widget.isSleeping ||
+        old.timeOfDay != widget.timeOfDay;
+
+    if (stateChanged) {
       _frameController.duration = _frameDuration;
       _currentFrame = 0;
       _frameController.forward(from: 0);
-    }
-
-    // When time of day changes (different asset), restart
-    if (old.timeOfDay != widget.timeOfDay) {
-      _currentFrame = 0;
-      _frameController.forward(from: 0);
+      _loadSprite();
     }
   }
 
@@ -118,76 +176,50 @@ class _AnimalSpriteState extends State<AnimalSprite>
     super.dispose();
   }
 
-  // ── The correct sprite sheet asset path ───────────────────────
-  String get _assetPath {
-    final tod = widget.timeOfDay.name;
-    return widget.isSleeping
-        ? widget.config.sleepingAssetPath(tod)
-        : widget.config.awakeAssetPath(tod);
-  }
-
-  // ── Convert frame index to Align value ────────────────────────
-  // Frame 0 → -1.0 (leftmost), Frame N-1 → +1.0 (rightmost)
-  double get _alignX {
-    if (_totalFrames <= 1) return 0.0;
-    return -1.0 + (2.0 * _currentFrame / (_totalFrames - 1));
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedOpacity(
-      // Fade in/out over 1.2 seconds when visibility changes
       opacity: widget.isVisible ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 1200),
       curve: Curves.easeInOut,
-      child: widget.isVisible ? _buildSpriteFrame() : const SizedBox.shrink(),
+      // Always keep the widget in the tree so AnimatedOpacity can fade it.
+      // When not visible it is transparent but still animating (low cost).
+      child: _buildContent(),
     );
   }
 
-  Widget _buildSpriteFrame() {
-    final frameWidth = widget.config.displayWidth;
-    final frameCount = _totalFrames;
+  Widget _buildContent() {
+    if (_spriteImage == null) {
+      // Show emoji placeholder while image loads
+      return SizedBox(
+        width: widget.config.displayWidth,
+        height: widget.config.displayHeight,
+        child: Center(
+          child: Text(
+            _animalEmoji(widget.config.name),
+            style: TextStyle(
+              fontSize: widget.config.displayWidth * 0.5,
+            ),
+          ),
+        ),
+      );
+    }
 
     return SizedBox(
-      width: frameWidth,
-      height: frameWidth, // Sprites are approximately square
-      child: ClipRect(
-        // ClipRect acts as the window — it hides everything outside its bounds
-        child: Align(
-          // Align shifts the large sprite sheet image so the correct frame
-          // appears inside the ClipRect window
-          alignment: Alignment(_alignX, 0.0),
-          widthFactor: 1.0 / frameCount,
-          child: Image.asset(
-            _assetPath,
-            // The full image must be frameCount × frameWidth wide
-            width: frameWidth * frameCount,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              // Show a placeholder emoji if the asset is missing
-              return Container(
-                width: frameWidth,
-                height: frameWidth,
-                decoration: BoxDecoration(
-                  color: Colors.black26,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Center(
-                  child: Text(
-                    _animalEmoji(widget.config.name),
-                    style: TextStyle(fontSize: frameWidth * 0.4),
-                  ),
-                ),
-              );
-            },
-          ),
+      width: widget.config.displayWidth,
+      height: widget.config.displayHeight,
+      child: CustomPaint(
+        painter: _SpritePainter(
+          image: _spriteImage!,
+          frameIndex: _currentFrame,
+          totalFrames: _totalFrames,
         ),
       ),
     );
   }
 
   String _animalEmoji(String name) {
-    const emojis = {
+    const m = {
       'fish': '🐟',
       'bird': '🐦',
       'rabbit': '🐰',
@@ -195,6 +227,54 @@ class _AnimalSpriteState extends State<AnimalSprite>
       'otter': '🦦',
       'deer': '🦌',
     };
-    return emojis[name] ?? '🐾';
+    return m[name] ?? '🐾';
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SpritePainter — pixel-perfect frame extraction with drawImageRect
+// ─────────────────────────────────────────────────────────────
+
+class _SpritePainter extends CustomPainter {
+  final ui.Image image;
+  final int frameIndex;
+  final int totalFrames;
+
+  const _SpritePainter({
+    required this.image,
+    required this.frameIndex,
+    required this.totalFrames,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (totalFrames <= 0) return;
+
+    // Source rectangle: exactly one frame from the sprite sheet
+    // Frame width = total image width / number of frames
+    final frameWidth = image.width / totalFrames;
+    final srcLeft = frameIndex * frameWidth;
+
+    final srcRect = Rect.fromLTWH(
+      srcLeft, // left edge of this frame
+      0, // always top
+      frameWidth, // width of exactly one frame
+      image.height.toDouble(), // full height of the sheet
+    );
+
+    // Destination rectangle: fill the widget bounds
+    final dstRect = Rect.fromLTWH(0, 0, size.width, size.height);
+
+    final paint = Paint()
+      ..filterQuality = FilterQuality.medium
+      ..isAntiAlias = true;
+
+    canvas.drawImageRect(image, srcRect, dstRect, paint);
+  }
+
+  @override
+  bool shouldRepaint(_SpritePainter old) =>
+      old.frameIndex != frameIndex ||
+          old.image != image ||
+          old.totalFrames != totalFrames;
 }

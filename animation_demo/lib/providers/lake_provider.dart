@@ -1,6 +1,6 @@
 // lib/providers/lake_provider.dart
 
-import 'package:animation_demo/mock_api_service/mock_api_service.dart';
+import 'package:baseline/mock_api_service/mock_api_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/ecosystem_state.dart';
@@ -12,8 +12,8 @@ class PendingPointsNotifier extends StateNotifier<int?> {
 }
 
 final pendingPointsProvider =
-    StateNotifierProvider<PendingPointsNotifier, int?>(
-  (_) => PendingPointsNotifier(),
+StateNotifierProvider<PendingPointsNotifier, int?>(
+      (_) => PendingPointsNotifier(),
 );
 
 class LakeNotifier extends StateNotifier<EcosystemState> {
