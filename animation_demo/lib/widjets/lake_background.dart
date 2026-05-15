@@ -1,3 +1,4 @@
+// lib/widgets/lake_background.dart
 //
 // Renders the correct background image and crossfades to the new
 // one whenever the stage or water level changes.
@@ -12,7 +13,6 @@
 //   5. Once complete, the old path is replaced by the new path
 
 import 'package:flutter/material.dart';
-import '../utils/safe_curve.dart';
 
 class LakeBackground extends StatefulWidget {
   final String assetPath;
@@ -45,15 +45,9 @@ class _LakeBackgroundState extends State<LakeBackground>
       vsync: this,
     );
 
-    // Add listener to clamp controller values
-    _controller.addListener(() {
-      if (_controller.value < 0.0) _controller.value = 0.0;
-      if (_controller.value > 1.0) _controller.value = 1.0;
-    });
-
     // CurvedAnimation makes the fade ease in and out (not linear)
     _fadeAnimation = CurvedAnimation(
-      parent: ClampedAnimation(_controller),
+      parent: _controller,
       curve: Curves.easeInOut,
     );
   }
@@ -105,14 +99,14 @@ class _LakeBackgroundState extends State<LakeBackground>
     return AnimatedBuilder(
       animation: _fadeAnimation,
       builder: (context, _) {
-        final fadeValue = _fadeAnimation.value.clamp(0.0, 1.0);
         return Stack(
           fit: StackFit.expand,
           children: [
             // ── Layer 1: Current image (fades OUT) ───────────────
             Opacity(
-              opacity:
-                  _nextPath != null ? (1.0 - fadeValue).clamp(0.0, 1.0) : 1.0,
+              opacity: _nextPath != null
+                  ? (1.0 - _fadeAnimation.value).clamp(0.0, 1.0)
+                  : 1.0,
               child: Image.asset(
                 _currentPath,
                 fit: BoxFit.cover,
@@ -123,7 +117,7 @@ class _LakeBackgroundState extends State<LakeBackground>
                     child: Text(
                       'Missing asset:\n$_currentPath',
                       style:
-                          const TextStyle(color: Colors.white70, fontSize: 11),
+                      const TextStyle(color: Colors.white70, fontSize: 11),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -134,7 +128,7 @@ class _LakeBackgroundState extends State<LakeBackground>
             // ── Layer 2: Next image (fades IN) ───────────────────
             if (_nextPath != null)
               Opacity(
-                opacity: fadeValue,
+                opacity: _fadeAnimation.value.clamp(0.0, 1.0),
                 child: Image.asset(
                   _nextPath!,
                   fit: BoxFit.cover,

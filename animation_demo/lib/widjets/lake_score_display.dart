@@ -1,3 +1,4 @@
+// lib/widgets/lake_score_display.dart
 //
 // Displays the current lake score as a number that smoothly counts
 // up or down when the score changes.
@@ -13,7 +14,6 @@
 // over 600 milliseconds.
 
 import 'package:flutter/material.dart';
-import '../utils/safe_curve.dart';
 
 class LakeScoreDisplay extends StatefulWidget {
   final int score;
@@ -47,12 +47,6 @@ class _LakeScoreDisplayState extends State<LakeScoreDisplay>
       vsync: this,
     );
 
-    // Add listener to clamp controller values
-    _controller.addListener(() {
-      if (_controller.value < 0.0) _controller.value = 0.0;
-      if (_controller.value > 1.0) _controller.value = 1.0;
-    });
-
     _scoreAnimation =
         IntTween(begin: widget.score, end: widget.score).animate(_controller);
   }
@@ -62,12 +56,9 @@ class _LakeScoreDisplayState extends State<LakeScoreDisplay>
     super.didUpdateWidget(old);
 
     if (old.score != widget.score) {
-      // Count from old score to new score with safe curve
+      // Count from old score to new score
       _scoreAnimation = IntTween(begin: old.score, end: widget.score).animate(
-        CurvedAnimation(
-          parent: ClampedAnimation(_controller),
-          curve: Curves.easeOut,
-        ),
+        CurvedAnimation(parent: _controller, curve: Curves.easeOut),
       );
       _controller.forward(from: 0);
     }
@@ -84,9 +75,6 @@ class _LakeScoreDisplayState extends State<LakeScoreDisplay>
     return AnimatedBuilder(
       animation: _scoreAnimation,
       builder: (context, _) {
-        // Clamp the progress value to ensure it's within [0,1]
-        final progress = (_scoreAnimation.value / 100.0).clamp(0.0, 1.0);
-
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
@@ -118,7 +106,7 @@ class _LakeScoreDisplayState extends State<LakeScoreDisplay>
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
-                    value: progress,
+                    value: _scoreAnimation.value / 100.0,
                     backgroundColor: Colors.white.withOpacity(0.2),
                     valueColor: AlwaysStoppedAnimation<Color>(
                       _stageColor(widget.stage),

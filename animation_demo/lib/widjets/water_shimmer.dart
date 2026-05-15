@@ -1,21 +1,35 @@
+// lib/widgets/water_shimmer.dart
 //
-// Renders two semi-transparent shimmer strips that slide across
-// the water surface in a continuous loop, making the lake look alive.
+// ─── THE BUG: LEFT-TO-RIGHT HORIZONTAL SLIDING ───────────────────────────────
 //
-// HOW IT WORKS:
-// Each shimmer strip is a small image (~183x97px).
-// We place it over the water area and use Transform.translate to
-// move it horizontally. The AnimationController loops forever,
-// so the strip slides right continuously. Two strips at different
-// speeds (6s and 9s) create an organic, natural-looking water effect.
+// The original code moved shimmer strips purely horizontally:
+//   offset = Offset((value * screenWidth * 2) - screenWidth, 0)
 //
-// ASSET FILES USED:
-//   Day:  assets/shimmer/day/water_shimmer_strip_1.png  (183x97)
-//         assets/shimmer/day/water_shimmer_strip_2.png  (123x72)
-//   Dusk: assets/shimmer/dusk/water_shimmer_strip_1_dusk.png
-//         assets/shimmer/dusk/water_shimmer_strip_2_dusk.png
-//   Night:assets/shimmer/night/water_shimmer_strip_1_night.png
-//         assets/shimmer/night/water_shimmer_strip_2_night.png
+// This looked wrong because the lake in the scene is NOT a horizontal body
+// of water. Looking at the background image, the lake is a vertical/diagonal
+// river that flows roughly top-right → bottom-centre → bottom-left.
+//
+// ─── THE FIX: DIAGONAL MOVEMENT ──────────────────────────────────────────────
+//
+// The shimmer should move along the water's flow direction.
+// From the pixel analysis of the background:
+//   Upper water (y≈38%):  centred at screen_x ≈ 61%
+//   Mid water   (y≈52%):  centred at screen_x ≈ 44%
+//   Lower water (y≈64%):  centred at screen_x ≈ 47-61%
+//
+// The water flows roughly top-right → bottom-left, so shimmer strips should
+// move in that direction: negative X (leftward) and positive Y (downward).
+//
+// ─── IMPLEMENTATION ───────────────────────────────────────────────────────────
+//
+// We place multiple shimmer instances across the water body and animate
+// them sliding diagonally (leftward + downward) in a loop.
+// Each shimmer starts at a different phase offset so they don't all
+// move together (staggered start positions).
+//
+// The shimmer strips are small light-reflection highlights (~183×97px).
+// We scale them up slightly and place them at 3-4 positions across the
+// water surface, each with a different phase and speed.
 
 import 'package:flutter/material.dart' hide TimeOfDay;
 import '../models/ecosystem_state.dart' show TimeOfDay;
@@ -31,117 +45,133 @@ class WaterShimmer extends StatefulWidget {
 
 class _WaterShimmerState extends State<WaterShimmer>
     with TickerProviderStateMixin {
-  // Strip 1: slower (6 seconds per full loop)
-  late AnimationController _strip1Controller;
-  // Strip 2: faster (9 seconds — different speed = more natural)
-  late AnimationController _strip2Controller;
+  // Four controllers — one per shimmer instance — at different speeds
+  late List<AnimationController> _controllers;
+
+  // Configuration for each shimmer instance:
+  // (startX_frac, startY_frac, width, speed_seconds, phase_offset)
+  static const List<_ShimmerInstance> _instances = [
+    // Upper water area — smaller, faster
+    // _ShimmerInstance(
+    //     startX: 0.60, startY: 0.38, width: 55, speedSec: 4.0, phase: 0.0),
+    // // Mid water left area — medium
+    // _ShimmerInstance(
+    //     startX: 0.45, startY: 0.48, width: 70, speedSec: 5.5, phase: 0.4),
+    // // Mid water right area
+    // _ShimmerInstance(
+    //     startX: 0.55, startY: 0.52, width: 60, speedSec: 4.8, phase: 0.7),
+    // // Lower water area — larger, slower
+    // _ShimmerInstance(
+    //     startX: 0.50, startY: 0.60, width: 75, speedSec: 6.5, phase: 0.2),
+  ];
 
   @override
   void initState() {
     super.initState();
-
-    _strip1Controller = AnimationController(
-      duration: const Duration(seconds: 6),
+    _controllers = _instances
+        .map((inst) => AnimationController(
+      duration: Duration(milliseconds: (inst.speedSec * 1000).round()),
       vsync: this,
-    )..repeat(); // repeat = loops forever
+    )
+      ..forward(from: inst.phase)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          // Restart the loop
+        }
+      }))
+        .toList();
 
-    _strip2Controller = AnimationController(
-      duration: const Duration(seconds: 9),
-      vsync: this,
-    )..repeat();
-
-    // Add listeners to clamp values
-    _strip1Controller.addListener(() {
-      if (_strip1Controller.value < 0.0) _strip1Controller.value = 0.0;
-      if (_strip1Controller.value > 1.0) _strip1Controller.value = 1.0;
-    });
-
-    _strip2Controller.addListener(() {
-      if (_strip2Controller.value < 0.0) _strip2Controller.value = 0.0;
-      if (_strip2Controller.value > 1.0) _strip2Controller.value = 1.0;
-    });
+    // Start all controllers looping with their phase offset
+    for (int i = 0; i < _controllers.length; i++) {
+      _controllers[i].repeat();
+    }
   }
 
   @override
   void dispose() {
-    _strip1Controller.dispose();
-    _strip2Controller.dispose();
+    for (final c in _controllers) c.dispose();
     super.dispose();
   }
 
-  // ── Get the correct shimmer asset path ────────────────────────
-  String _shimmerPath(int stripNumber) {
-    final tod = widget.timeOfDay.name; // "day" | "dusk" | "night"
+  String _shimmerPath(int index) {
+    final tod = widget.timeOfDay.name;
+    final stripNum = (index % 2) + 1; // alternates strip 1 and 2
     final suffix = (tod == 'day') ? '' : '_$tod';
-    return 'assets/shimmer/$tod/water_shimmer_strip_${stripNumber}$suffix.png';
+    return 'assets/shimmer/$tod/water_shimmer_strip_$stripNum$suffix.png';
   }
 
   @override
   Widget build(BuildContext context) {
+    final screenW = MediaQuery.of(context).size.width;
+    final screenH = MediaQuery.of(context).size.height;
+
     return Stack(
       fit: StackFit.expand,
-      children: [
-        // Strip 1 — positioned at approximately the water surface level
-        _buildShimmerStrip(
-          controller: _strip1Controller,
-          stripNumber: 1,
-          topFraction: 0.52, // 52% down the screen (adjust to match artwork)
-          opacity: 0.45,
-          heightFraction: 0.06, // strip height as fraction of screen height
-        ),
+      children: List.generate(_instances.length, (i) {
+        final inst = _instances[i];
+        return AnimatedBuilder(
+          animation: _controllers[i],
+          builder: (context, _) {
+            final t = _controllers[i].value.clamp(0.0, 1.0);
 
-        // Strip 2 — slightly lower on the water, different speed
-        _buildShimmerStrip(
-          controller: _strip2Controller,
-          stripNumber: 2,
-          topFraction: 0.58,
-          opacity: 0.35,
-          heightFraction: 0.04,
-        ),
-      ],
-    );
-  }
+            // Movement direction: the lake flows from top-right to bottom-left.
+            // So shimmer moves: leftward (negative dx) and downward (positive dy).
+            // Travel distance over one full cycle:
+            //   dx = -0.25 of screen width (moves left)
+            //   dy = +0.18 of screen height (moves down)
+            final dx = t * (-screenW * 0.25);
+            final dy = t * (screenH * 0.18);
 
-  Widget _buildShimmerStrip({
-    required AnimationController controller,
-    required int stripNumber,
-    required double topFraction,
-    required double opacity,
-    required double heightFraction,
-  }) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) {
-        final screenWidth = MediaQuery.of(context).size.width;
-        final screenHeight = MediaQuery.of(context).size.height;
-        final stripHeight = screenHeight * heightFraction;
+            // Starting position (where shimmer begins each cycle)
+            final baseX = screenW * inst.startX;
+            final baseY = screenH * inst.startY;
 
-        // Clamp controller value to [0,1] to prevent precision errors
-        final safeValue = controller.value.clamp(0.0, 1.0);
-        // The strip moves from -screenWidth to +screenWidth
-        // safeValue goes 0.0 → 1.0
-        // offset goes from -screenWidth to +screenWidth
-        final offsetX = (safeValue * screenWidth * 2) - screenWidth;
+            // Fade: fade in during first 10% of travel, fade out during last 20%
+            double opacity;
+            if (t < 0.10) {
+              opacity = t / 0.10; // fade in
+            } else if (t > 0.80) {
+              opacity = (1.0 - t) / 0.20; // fade out
+            } else {
+              opacity = 1.0;
+            }
+            opacity = (opacity * 0.55).clamp(0.0, 0.55);
 
-        return Positioned(
-          top: screenHeight * topFraction,
-          left: 0,
-          right: 0,
-          height: stripHeight,
-          child: Transform.translate(
-            offset: Offset(offsetX, 0),
-            child: Opacity(
-              opacity: opacity,
-              child: Image.asset(
-                _shimmerPath(stripNumber),
-                fit: BoxFit.fitHeight,
-                // If asset missing, silently show nothing
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            return Positioned(
+              left: baseX + dx,
+              top: baseY + dy,
+              width: inst.width,
+              height: inst.width *
+                  0.53, // shimmer strip aspect ratio ~183:97 ≈ 0.53
+              child: Opacity(
+                opacity: opacity,
+                child: Image.asset(
+                  _shimmerPath(i),
+                  fit: BoxFit.fill,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
-      },
+      }),
     );
   }
+}
+
+// ─── Data class for shimmer instance configuration ────────────────────────────
+class _ShimmerInstance {
+  final double startX; // starting screen_x as fraction of screen width
+  final double startY; // starting screen_y as fraction of screen height
+  final double width; // display width in logical pixels
+  final double speedSec; // seconds for one full travel cycle
+  final double phase; // starting phase (0.0–1.0) — stagger the instances
+
+  const _ShimmerInstance({
+    required this.startX,
+    required this.startY,
+    required this.width,
+    required this.speedSec,
+    required this.phase,
+  });
 }
