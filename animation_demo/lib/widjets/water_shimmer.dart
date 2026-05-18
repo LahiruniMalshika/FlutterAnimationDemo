@@ -1,177 +1,687 @@
-// lib/widgets/water_shimmer.dart
+// lib/widjets/water_shimmer.dart
 //
-// ─── THE BUG: LEFT-TO-RIGHT HORIZONTAL SLIDING ───────────────────────────────
+// Renders soft "shimmer" glints flowing along the lake surface.
 //
-// The original code moved shimmer strips purely horizontally:
-//   offset = Offset((value * screenWidth * 2) - screenWidth, 0)
+// ─── PER-(STAGE, WATER LEVEL) CONFIG ────────────────────────────────────────
 //
-// This looked wrong because the lake in the scene is NOT a horizontal body
-// of water. Looking at the background image, the lake is a vertical/diagonal
-// river that flows roughly top-right → bottom-centre → bottom-left.
+// Shimmer intensity is driven by two state values:
+//   • stage      — 1, 2, 3 (ecosystem maturity)
+//   • waterLevel — low, mid, high
 //
-// ─── THE FIX: DIAGONAL MOVEMENT ──────────────────────────────────────────────
+// The rules:
+//   stage 1 + low                  → NO shimmer at all (early-return)
+//   stage 1 + mid/high             → shimmer present, slower speeds
+//   stage 2 + low/mid/high         → all three levels shimmer
+//   stage 3 + low/mid/high         → all three levels shimmer
 //
-// The shimmer should move along the water's flow direction.
-// From the pixel analysis of the background:
-//   Upper water (y≈38%):  centred at screen_x ≈ 61%
-//   Mid water   (y≈52%):  centred at screen_x ≈ 44%
-//   Lower water (y≈64%):  centred at screen_x ≈ 47-61%
+// Both the NUMBER of streams (glint count) and the SPEED (cycleMs) vary
+// per combo — see `_streamsFor(...)` below for the full 9-cell table.
 //
-// The water flows roughly top-right → bottom-left, so shimmer strips should
-// move in that direction: negative X (leftward) and positive Y (downward).
+// When `stage` or `waterLevel` changes, controllers are disposed and
+// rebuilt in `didUpdateWidget`. The stream list itself moves OUT of a
+// top-level const and INTO instance state so each rebuild can use a
+// different config.
 //
-// ─── IMPLEMENTATION ───────────────────────────────────────────────────────────
+// ─── DESIGN: STREAMS, NOT INDEPENDENT GLINTS ────────────────────────────────
 //
-// We place multiple shimmer instances across the water body and animate
-// them sliding diagonally (leftward + downward) in a loop.
-// Each shimmer starts at a different phase offset so they don't all
-// move together (staggered start positions).
+// A stream defines ONE flow line (start → end). It produces N glints
+// traveling that line, evenly spaced in time, sharing one
+// AnimationController.
 //
-// The shimmer strips are small light-reflection highlights (~183×97px).
-// We scale them up slightly and place them at 3-4 positions across the
-// water surface, each with a different phase and speed.
+//   personalT = (controllerT + glintIndex / glintCount) % 1.0
+//
+// Each glint runs through: fade IN (0.00–0.18), full (0.18–0.82),
+// fade OUT (0.82–1.00). Position interpolates linearly across the
+// whole cycle (no hold).
 
+import 'dart:math' show pi;
 import 'package:flutter/material.dart' hide TimeOfDay;
-import '../models/ecosystem_state.dart' show TimeOfDay;
+import '../models/ecosystem_state.dart' show TimeOfDay, WaterLevel;
 
 class WaterShimmer extends StatefulWidget {
   final TimeOfDay timeOfDay;
+  final int stage; // 1, 2, or 3
+  final WaterLevel waterLevel; // low, mid, high
 
-  const WaterShimmer({required this.timeOfDay, super.key});
+  const WaterShimmer({
+    required this.timeOfDay,
+    required this.stage,
+    required this.waterLevel,
+    super.key,
+  });
 
   @override
   State<WaterShimmer> createState() => _WaterShimmerState();
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Stream configuration
+// ─────────────────────────────────────────────────────────────────────────
+
+class _ShimmerStream {
+  final double startX; // entry point (fraction of screen width)
+  final double startY; // entry point (fraction of screen height)
+  final double endX; // exit point
+  final double endY;
+  final int glintCount; // glints flowing along this stream at once
+  final int cycleMs; // ms for one glint to travel start → end (lower = faster)
+  final double rotationDeg;
+  final double widthPx;
+  final int stripNumber; // 1 or 2
+  final double peakOpacity;
+
+  const _ShimmerStream({
+    required this.startX,
+    required this.startY,
+    required this.endX,
+    required this.endY,
+    required this.glintCount,
+    required this.cycleMs,
+    required this.rotationDeg,
+    required this.widthPx,
+    required this.stripNumber,
+    required this.peakOpacity,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Per-(stage, waterLevel) stream table
+//
+// Tune these freely — each combo is independent. The general progression:
+//   • stage 1 low   → none
+//   • stage 1 mid   → 2 streams, slow
+//   • stage 1 high  → 3 streams, slow-medium
+//   • stage 2 low   → 3 streams, medium
+//   • stage 2 mid   → 3 streams, medium-fast, more glints
+//   • stage 2 high  → 4 streams, fast
+//   • stage 3 low   → 4 streams, fast
+//   • stage 3 mid   → 4 streams, faster, more glints
+//   • stage 3 high  → 4 streams, fastest, most glints
+// ─────────────────────────────────────────────────────────────────────────
+
+List<_ShimmerStream> _streamsFor(int stage, WaterLevel level) {
+  // ── STAGE 1 ────────────────────────────────────────────────────────────
+  if (stage == 1 && level == WaterLevel.low) {
+    return const []; // NO shimmer
+  }
+  if (stage == 1 && level == WaterLevel.mid) {
+    return const [
+      _ShimmerStream(
+        startX: 0.65,
+        startY: 0.30,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 2,
+        cycleMs: 10000,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+      _ShimmerStream(
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 1,
+        cycleMs: 6500,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+      _ShimmerStream(
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 1,
+        cycleMs: 8000,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+    ];
+  }
+  if (stage == 1 && level == WaterLevel.high) {
+    return const [
+      _ShimmerStream(
+        // Upper lake flow
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 3,
+        cycleMs: 10000,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // mid lake - right to left flow
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 1,
+        cycleMs: 8000,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // left end flow
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+      _ShimmerStream(
+        // bottom right flow
+        startX: 0.05,
+        startY: 0.55,
+        endX: 0.00,
+        endY: 0.60,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 80,
+        widthPx: 38,
+        stripNumber: 1,
+        peakOpacity: 0.85,
+      ),
+    ];
+  }
+
+  // ── STAGE 2 ────────────────────────────────────────────────────────────
+  if (stage == 2 && level == WaterLevel.low) {
+    return const [
+      _ShimmerStream(
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 2,
+        cycleMs: 4500,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.75,
+      ),
+      _ShimmerStream(
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 2,
+        cycleMs: 4800,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.75,
+      ),
+      _ShimmerStream(
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 2,
+        cycleMs: 5000,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+    ];
+  }
+  if (stage == 2 && level == WaterLevel.mid) {
+    return const [
+      _ShimmerStream(
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 3,
+        cycleMs: 3800,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 2,
+        cycleMs: 4000,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 3,
+        cycleMs: 4200,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.70,
+      ),
+    ];
+  }
+  if (stage == 2 && level == WaterLevel.high) {
+    return const [
+      _ShimmerStream(
+        // Upper lake flow
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 3,
+        cycleMs: 10000,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // mid lake - right to left flow
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 1,
+        cycleMs: 8000,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // left end flow
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+      _ShimmerStream(
+        // bottom right flow
+        startX: 0.05,
+        startY: 0.55,
+        endX: 0.00,
+        endY: 0.60,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 80,
+        widthPx: 38,
+        stripNumber: 1,
+        peakOpacity: 0.85,
+      ),
+    ];
+  }
+
+  // ── STAGE 3 ────────────────────────────────────────────────────────────
+  if (stage == 3 && level == WaterLevel.low) {
+    return const [
+      _ShimmerStream(
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 3,
+        cycleMs: 3000,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 2,
+        cycleMs: 3200,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 3,
+        cycleMs: 3500,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.75,
+      ),
+      _ShimmerStream(
+        startX: 0.05,
+        startY: 0.55,
+        endX: 0.00,
+        endY: 0.60,
+        glintCount: 2,
+        cycleMs: 3800,
+        rotationDeg: 80,
+        widthPx: 38,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+    ];
+  }
+  if (stage == 3 && level == WaterLevel.mid) {
+    return const [
+      _ShimmerStream(
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 4,
+        cycleMs: 2500,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.85,
+      ),
+      _ShimmerStream(
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 3,
+        cycleMs: 2700,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 2,
+        peakOpacity: 0.85,
+      ),
+      _ShimmerStream(
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 3,
+        cycleMs: 2900,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        startX: 0.05,
+        startY: 0.55,
+        endX: 0.00,
+        endY: 0.60,
+        glintCount: 3,
+        cycleMs: 3000,
+        rotationDeg: 80,
+        widthPx: 38,
+        stripNumber: 2,
+        peakOpacity: 0.85,
+      ),
+    ];
+  }
+  if (stage == 3 && level == WaterLevel.high) {
+    return const [
+      _ShimmerStream(
+        // Upper lake flow
+        startX: 0.65,
+        startY: 0.24,
+        endX: 0.65,
+        endY: 0.40,
+        glintCount: 3,
+        cycleMs: 10000,
+        rotationDeg: 25,
+        widthPx: 30,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // mid lake - right to left flow
+        startX: 0.70,
+        startY: 0.55,
+        endX: 0.78,
+        endY: 0.65,
+        glintCount: 1,
+        cycleMs: 8000,
+        rotationDeg: -5,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.80,
+      ),
+      _ShimmerStream(
+        // left end flow
+        startX: 0.58,
+        startY: 0.50,
+        endX: 0.25,
+        endY: 0.55,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 70,
+        widthPx: 50,
+        stripNumber: 1,
+        peakOpacity: 0.65,
+      ),
+      _ShimmerStream(
+        // bottom right flow
+        startX: 0.05,
+        startY: 0.55,
+        endX: 0.00,
+        endY: 0.60,
+        glintCount: 2,
+        cycleMs: 8000,
+        rotationDeg: 80,
+        widthPx: 38,
+        stripNumber: 1,
+        peakOpacity: 0.85,
+      ),
+    ];
+  }
+
+  // Fallback (shouldn't be reached if stages/levels stay in their enums).
+  return const [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────
+
 class _WaterShimmerState extends State<WaterShimmer>
     with TickerProviderStateMixin {
-  // Four controllers — one per shimmer instance — at different speeds
+  late List<_ShimmerStream> _streams;
   late List<AnimationController> _controllers;
-
-  // Configuration for each shimmer instance:
-  // (startX_frac, startY_frac, width, speed_seconds, phase_offset)
-  static const List<_ShimmerInstance> _instances = [
-    // Upper water area — smaller, faster
-    // _ShimmerInstance(
-    //     startX: 0.60, startY: 0.38, width: 55, speedSec: 4.0, phase: 0.0),
-    // // Mid water left area — medium
-    // _ShimmerInstance(
-    //     startX: 0.45, startY: 0.48, width: 70, speedSec: 5.5, phase: 0.4),
-    // // Mid water right area
-    // _ShimmerInstance(
-    //     startX: 0.55, startY: 0.52, width: 60, speedSec: 4.8, phase: 0.7),
-    // // Lower water area — larger, slower
-    // _ShimmerInstance(
-    //     startX: 0.50, startY: 0.60, width: 75, speedSec: 6.5, phase: 0.2),
-  ];
 
   @override
   void initState() {
     super.initState();
-    _controllers = _instances
-        .map((inst) => AnimationController(
-      duration: Duration(milliseconds: (inst.speedSec * 1000).round()),
-      vsync: this,
-    )
-      ..forward(from: inst.phase)
-      ..addStatusListener((status) {
-        if (status == AnimationStatus.completed) {
-          // Restart the loop
-        }
-      }))
-        .toList();
+    _buildStreamsAndControllers();
+  }
 
-    // Start all controllers looping with their phase offset
-    for (int i = 0; i < _controllers.length; i++) {
-      _controllers[i].repeat();
+  @override
+  void didUpdateWidget(covariant WaterShimmer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Rebuild only when the config changes — timeOfDay alone just swaps assets
+    // and does NOT require new controllers.
+    if (oldWidget.stage != widget.stage ||
+        oldWidget.waterLevel != widget.waterLevel) {
+      _disposeControllers();
+      _buildStreamsAndControllers();
+    }
+  }
+
+  void _buildStreamsAndControllers() {
+    _streams = _streamsFor(widget.stage, widget.waterLevel);
+    // ONE controller per STREAM — glints within a stream share it and stay synced.
+    _controllers = _streams.map((stream) {
+      final c = AnimationController(
+        duration: Duration(milliseconds: stream.cycleMs),
+        vsync: this,
+      );
+      c.repeat();
+      return c;
+    }).toList(growable: false);
+  }
+
+  void _disposeControllers() {
+    for (final c in _controllers) {
+      c.dispose();
     }
   }
 
   @override
   void dispose() {
-    for (final c in _controllers) c.dispose();
+    _disposeControllers();
     super.dispose();
   }
 
-  String _shimmerPath(int index) {
+  String _assetPath(int stripNumber) {
     final tod = widget.timeOfDay.name;
-    final stripNum = (index % 2) + 1; // alternates strip 1 and 2
-    final suffix = (tod == 'day') ? '' : '_$tod';
-    return 'assets/shimmer/$tod/water_shimmer_strip_$stripNum$suffix.png';
+    final suffix = tod == 'day' ? '' : '_$tod';
+    return 'assets/shimmer/$tod/water_shimmer_strip_$stripNumber$suffix.png';
+  }
+
+  /// Maps a glint's personal t (in [0,1]) to its current opacity.
+  /// Position drifts continuously over the whole cycle (no hold phase).
+  double _opacityForT(double t, double peak) {
+    const fadeInEnd = 0.18;
+    const fadeOutStart = 0.82;
+
+    if (t < fadeInEnd) {
+      return (t / fadeInEnd) * peak;
+    }
+    if (t < fadeOutStart) {
+      return peak;
+    }
+    return peak * (1.0 - (t - fadeOutStart) / (1.0 - fadeOutStart));
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    final screenH = MediaQuery.of(context).size.height;
+    // Stage 1 low (and any other empty config) — render nothing.
+    if (_streams.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: List.generate(_instances.length, (i) {
-        final inst = _instances[i];
-        return AnimatedBuilder(
-          animation: _controllers[i],
-          builder: (context, _) {
-            final t = _controllers[i].value.clamp(0.0, 1.0);
+    final size = MediaQuery.of(context).size;
 
-            // Movement direction: the lake flows from top-right to bottom-left.
-            // So shimmer moves: leftward (negative dx) and downward (positive dy).
-            // Travel distance over one full cycle:
-            //   dx = -0.25 of screen width (moves left)
-            //   dy = +0.18 of screen height (moves down)
-            final dx = t * (-screenW * 0.25);
-            final dy = t * (screenH * 0.18);
+    // Flatten every (stream × glint) into one big list of widgets.
+    final widgets = <Widget>[];
+    for (int sIdx = 0; sIdx < _streams.length; sIdx++) {
+      final stream = _streams[sIdx];
+      final controller = _controllers[sIdx];
 
-            // Starting position (where shimmer begins each cycle)
-            final baseX = screenW * inst.startX;
-            final baseY = screenH * inst.startY;
+      for (int gIdx = 0; gIdx < stream.glintCount; gIdx++) {
+        widgets.add(_GlintWidget(
+          key: ValueKey('stream${sIdx}_glint$gIdx'),
+          stream: stream,
+          glintIndex: gIdx,
+          controller: controller,
+          screenSize: size,
+          assetPath: _assetPath(stream.stripNumber),
+          resolveOpacity: _opacityForT,
+        ));
+      }
+    }
 
-            // Fade: fade in during first 10% of travel, fade out during last 20%
-            double opacity;
-            if (t < 0.10) {
-              opacity = t / 0.10; // fade in
-            } else if (t > 0.80) {
-              opacity = (1.0 - t) / 0.20; // fade out
-            } else {
-              opacity = 1.0;
-            }
-            opacity = (opacity * 0.55).clamp(0.0, 0.55);
-
-            return Positioned(
-              left: baseX + dx,
-              top: baseY + dy,
-              width: inst.width,
-              height: inst.width *
-                  0.53, // shimmer strip aspect ratio ~183:97 ≈ 0.53
-              child: Opacity(
-                opacity: opacity,
-                child: Image.asset(
-                  _shimmerPath(i),
-                  fit: BoxFit.fill,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                ),
-              ),
-            );
-          },
-        );
-      }),
+    return IgnorePointer(
+      child: Stack(fit: StackFit.expand, children: widgets),
     );
   }
 }
 
-// ─── Data class for shimmer instance configuration ────────────────────────────
-class _ShimmerInstance {
-  final double startX; // starting screen_x as fraction of screen width
-  final double startY; // starting screen_y as fraction of screen height
-  final double width; // display width in logical pixels
-  final double speedSec; // seconds for one full travel cycle
-  final double phase; // starting phase (0.0–1.0) — stagger the instances
+// ─────────────────────────────────────────────────────────────────────────
+// _GlintWidget — one glint within a stream
+//
+// Computes its OWN t as an offset of the stream's controller.value:
+//   personalT = (controller.value + glintIndex/glintCount) % 1.0
+// then interpolates position from start → end and opacity through the
+// fade-in / full / fade-out curve.
+// ─────────────────────────────────────────────────────────────────────────
 
-  const _ShimmerInstance({
-    required this.startX,
-    required this.startY,
-    required this.width,
-    required this.speedSec,
-    required this.phase,
+class _GlintWidget extends StatelessWidget {
+  final _ShimmerStream stream;
+  final int glintIndex;
+  final AnimationController controller;
+  final Size screenSize;
+  final String assetPath;
+  final double Function(double t, double peak) resolveOpacity;
+
+  const _GlintWidget({
+    required this.stream,
+    required this.glintIndex,
+    required this.controller,
+    required this.screenSize,
+    required this.assetPath,
+    required this.resolveOpacity,
+    super.key,
   });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        // Each glint runs the SAME cycle as the stream's controller, but
+        // offset by glintIndex / glintCount.
+        final offset = glintIndex / stream.glintCount;
+        final t = (controller.value + offset) % 1.0;
+
+        // Position: linear interpolation from start → end over the cycle.
+        final xFrac = stream.startX + (stream.endX - stream.startX) * t;
+        final yFrac = stream.startY + (stream.endY - stream.startY) * t;
+
+        // Opacity: fade-in / hold / fade-out (NO movement pause).
+        final opacity = resolveOpacity(t, stream.peakOpacity).clamp(0.0, 1.0);
+
+        // Asset aspect = 97/183 ≈ 0.530 (height/width).
+        const aspect = 97.0 / 183.0;
+        final w = stream.widthPx;
+        final h = w * aspect;
+
+        final cx = screenSize.width * xFrac;
+        final cy = screenSize.height * yFrac;
+
+        return Positioned(
+          left: cx - w / 2,
+          top: cy - h / 2,
+          width: w,
+          height: h,
+          child: Opacity(
+            opacity: opacity,
+            child: Transform.rotate(
+              angle: stream.rotationDeg * pi / 180.0,
+              child: Image.asset(
+                assetPath,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

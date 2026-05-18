@@ -22,7 +22,11 @@ class LakeScene extends ConsumerWidget {
       fit: StackFit.expand,
       children: [
         LakeBackground(assetPath: ecosystemState.backgroundAssetPath),
-        WaterShimmer(timeOfDay: ecosystemState.timeOfDay),
+        WaterShimmer(
+          timeOfDay: ecosystemState.timeOfDay,
+          stage: ecosystemState.stage,
+          waterLevel: ecosystemState.waterLevel,
+        ),
         WildlifeLayer(state: ecosystemState),
         Positioned(
           left: size.width * 0.70,
