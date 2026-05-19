@@ -26,6 +26,7 @@ flutter:
     - assets/animals/awake/day/
     - assets/animals/awake/dusk/
     - assets/animals/sleeping/day/
+    - assets/animals/sleeping/dusk/
     - assets/animals/sleeping/night/
     - assets/shimmer/day/
     - assets/shimmer/dusk/

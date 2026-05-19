@@ -165,7 +165,6 @@ class AnimalConfig {
     }
   }
 }
-
 // ─────────────────────────────────────────────────────────────
 // Animal configurations
 // ─────────────────────────────────────────────────────────────
@@ -228,7 +227,7 @@ const Map<String, AnimalConfig> kAnimalConfigs = {
     displayHeight: 75,
     minStage: 2,
     awakeFps: 3,
-    sleepingFps: 3,
+    sleepingFps: 1,
   ),
 
   // ── RABBIT — left ground bank, fixed ─────────────────────────

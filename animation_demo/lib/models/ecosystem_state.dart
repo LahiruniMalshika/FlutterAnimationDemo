@@ -206,7 +206,7 @@ class EcosystemState {
   static TimeOfDay resolveTimeOfDay() {
     final hour = DateTime.now().hour;
     if (hour >= 6 && hour < 17) return TimeOfDay.day;
-    if (hour >= 17 && hour < 24) return TimeOfDay.dusk;
+    if (hour >= 17 && hour < 20) return TimeOfDay.dusk;
     return TimeOfDay.night;
   }
 
